@@ -13,6 +13,7 @@ version 0.3 - Lanzada en Octubre del 2006
 version 0.4 - The same of 0.3 but in English (November 2009)
 */
 
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,7 +38,12 @@ struct buffer {
 	size_t                  length;
 };
 
-int Bpp;
+int		Bpp;
+int		fd[4];
+int		width		= 720;
+int		height		= 576;
+struct buffer	buffers[7];
+int		pixel_format	= 2;
 
 static void errno_exit (const char *s)
 {
@@ -77,7 +83,7 @@ static int read_frame  (int * fd, int width, int height, int * n_buffers,
 		}
 	}
 
-
+/*
 	int ret;
 	//writing to standard output
 	int x;
@@ -87,12 +93,69 @@ static int read_frame  (int * fd, int width, int height, int * n_buffers,
 			memcpy((buffers[4].start+(int)(width*y*Bpp)+x*Bpp), (buffers[0].start+(width*y*Bpp*2)+x*Bpp), Bpp);
 		}
 	}
+*/
 	return 1;
 }
 
 //just the main loop of this program 
-static void mainloop (int * fd, int width, int height, int * n_buffers, struct buffer * buffers, int pixel_format)
+static void mainloop (void *arg)
 {
+	int buffer = (int) arg;
+
+	printf ("thread %d started\n", buffer);
+	return 0;
+
+	unsigned int count;
+
+	switch (pixel_format)
+	{
+		case 0: //YUV420
+			Bpp = 12/8;
+			break;
+		case 1: //RGB565
+			Bpp = 2;
+			break;
+		case 2: //RGB32
+			Bpp = 4;
+			break;
+	}
+
+	count = 100;
+
+	for (;;) 
+	{
+		fd_set fds;
+		struct timeval tv;
+		int r;
+
+		FD_ZERO (&fds);
+		FD_SET (fd[buffer], &fds);
+
+		/* needed for select timeout */
+		tv.tv_sec = 2;
+		tv.tv_usec = 0;
+
+		//the classic select function, who allows to wait up to 2 seconds, until we have captured data,
+		r = select (fd[buffer] + 1, &fds, NULL, NULL, &tv);
+
+		if (-1 == r) 
+		{//error
+			if (EINTR == errno)
+				continue;
+			errno_exit ("select");
+		}
+
+		if (0 == r) 
+		{
+			fprintf (stderr, "select timeout\n");
+			exit (EXIT_FAILURE);
+		}
+
+		//read one frame from the device and put on the buffer
+		if (!read_frame (&fd[buffer], width, height, &buffer, &buffers[buffer], pixel_format))
+			printf("skipped frame?\n");
+		
+	}        
 }
 
 //dummy function, that represents the stop of capturing 
@@ -134,15 +197,7 @@ static struct buffer *init_read (unsigned int buffer_size)
 	}
 	buffers[0].length = buffer_size;
 	buffers[0].start = malloc (buffer_size);
-/*	buffers[1].length = buffer_size;
-	buffers[1].start = malloc (buffer_size);
-	buffers[2].length = buffer_size;
-	buffers[2].start = malloc (buffer_size);
-	buffers[3].length = buffer_size;
-	buffers[3].start = malloc (buffer_size);
-	buffers[4].length = buffer_size;
-	buffers[4].start = malloc (buffer_size);
-*/
+	
 	if (!buffers[0].start) 
 	{
 		fprintf (stderr, "Out of memory\n");
@@ -412,12 +467,12 @@ int main (int argc, char ** argv)
 	int                 set_inp              = 0;
 	int                 set_std              = 0;
 	char                dev_name[20];//            = "/dev/video0";
-	int                 fd[4]                ;//= -1;
-	int                 width                = 720;
-	int                 height               = 576;
+//	int                 fd[4]                ;//= -1;
+//	int                 width                = 720;
+//	int                 height               = 576;
 	int                 n_buffers;
-	int                 pixel_format         = 2;
-	struct buffer       buffers[7];//             = NULL;
+//	int                 pixel_format         = 2;
+//	struct buffer       buffers[7];//             = NULL;
 
 	//process all the command line arguments
 /*
@@ -502,8 +557,6 @@ int main (int argc, char ** argv)
 	int	have_dev = 0;
 
 	for (i=0; i<4; i++){
-//		strcpy (dev_name, "/dev/video");
-//		strcat (dev_name, itoa(devs[i]));
 		sprintf(dev_name, "/dev/video%d", devs[i]);
 		printf("initializing %s\n", dev_name);
 		
@@ -523,91 +576,62 @@ int main (int argc, char ** argv)
 
 		int buffer_size = init_device (&fd[i], dev_name, width, height, &n_buffers, pixel_format);
 
-//		struct buffer *buffers = NULL;
-//		buffers = calloc (1, sizeof (*buffers));
-
 		if (!buffers)
 		{
 			fprintf (stderr, "Out of memory\n");
 			exit (EXIT_FAILURE);
 		}
-		buffers[i+1].length = buffer_size;
-		buffers[i+1].start = malloc (buffer_size);
+		
+		buffers[i].length = buffer_size;
+		buffers[i].start = malloc (buffer_size);
 
-		if (!buffers[i+1].start)
+		if (!buffers[i].start)
 		{
 			fprintf (stderr, "Out of memory\n");
 			exit (EXIT_FAILURE);
 		}
 
+		start_capturing (&fd[i], &n_buffers);
 
-			have_dev = 1;
+		have_dev = 1;
 	}
 
 	if (!have_dev){
 		printf("No available device found!\n");
-		exit(2);
+//		exit(2);
 	}
 		
 
-	start_capturing (&fd[0], &n_buffers);
+	pthread_t thread[3];
 
+	int p;
+	for (p = 0; p < 4; p++) {
+		pthread_create(&thread[p], NULL, mainloop, (void *)p);
+	}
+
+	buffers[0].length = width*height*4;
+	buffers[0].start = malloc (width*height*4);
+
+	FILE *fp;
+	fp = fopen("/tmp/preview", "w");
+
+	while (1){
+	printf("0\n");
+	usleep(200000); //= 5 fps
+        fwrite(buffers[0].start,1, width*height*4, fp);
+	printf("*\n");
+	}
+
+	pthread_join(thread[0], NULL);
+	pthread_join(thread[1], NULL);
+	pthread_join(thread[2], NULL);
+	pthread_join(thread[3], NULL);
+
+	exit(0);
 //	mainloop (&fd[0], width, height, &n_buffers, buffers, pixel_format);
-	unsigned int count;
 
-	switch (pixel_format)
-	{
-		case 0: //YUV420
-			Bpp = 12/8;
-			break;
-		case 1: //RGB565
-			Bpp = 2;
-			break;
-		case 2: //RGB32
-			Bpp = 4;
-			break;
-	}
-
-	count = 100;
-//	int i;
-//	for (i=0; i<2; i++) 
-	for (;;) 
-	{
-		fd_set fds;
-		struct timeval tv;
-		int r;
-
-		FD_ZERO (&fds);
-		FD_SET (*fd, &fds);
-
-		/* needed for select timeout */
-		tv.tv_sec = 2;
-		tv.tv_usec = 0;
-
-		//the classic select function, who allows to wait up to 2 seconds, until we have captured data,
-		r = select (*fd + 1, &fds, NULL, NULL, &tv);
-
-		if (-1 == r) 
-		{//error
-			if (EINTR == errno)
-				continue;
-			errno_exit ("select");
-		}
-
-		if (0 == r) 
-		{
-			fprintf (stderr, "select timeout\n");
-			exit (EXIT_FAILURE);
-		}
-
-		//read one frame from the device and put on the buffer
-		if (!read_frame (fd, width, height, &n_buffers, buffers, pixel_format))
-			printf("skipped frame?\n");
-		
-		write(STDOUT_FILENO, buffers[0].start, width*height*4);
+	write(STDOUT_FILENO, buffers[0].start, width*height*4);
 					
-	}        
-
 	//TODO: main loop never exits, a break method must be implemented to execute 
 	//the following code
 
