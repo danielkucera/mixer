@@ -37,7 +37,7 @@ struct buffer {
 	size_t                  length;
 };
 
-float Bpp;
+int Bpp;
 
 static void errno_exit (const char *s)
 {
@@ -83,11 +83,8 @@ static int read_frame  (int * fd, int width, int height, int * n_buffers,
 	int x;
 	int y;
 	for (y=0; y<height/2; y++){
-
 		for (x=0; x<width/2; x++){
-			if (x<width/2){
-				memcpy((buffers[4].start+(int)(width*y*Bpp)+x*4), (buffers[0].start+(width*y*4*2)+x*4), 4);
-			}			
+			memcpy((buffers[4].start+(int)(width*y*Bpp)+x*Bpp), (buffers[0].start+(width*y*Bpp*2)+x*Bpp), Bpp);
 		}
 	}
 
@@ -95,8 +92,7 @@ static int read_frame  (int * fd, int width, int height, int * n_buffers,
 }
 
 //just the main loop of this program 
-static void mainloop (int * fd, int width, int height, int * n_buffers, 
-					struct buffer * buffers, int pixel_format)
+static void mainloop (int * fd, int width, int height, int * n_buffers, struct buffer * buffers, int pixel_format)
 {
 	unsigned int count;
 
@@ -469,14 +465,15 @@ int main (int argc, char ** argv)
 	int                 set_inp              = 0;
 	int                 set_std              = 0;
 	char                *dev_name            = "/dev/video0";
-	int                 fd                   = -1;
-	int                 width                = 640;
-	int                 height               = 480;
+	int                 fd[4]                ;//= -1;
+	int                 width                = 720;
+	int                 height               = 576;
 	int                 n_buffers;
-	int                 pixel_format         = 0;
+	int                 pixel_format         = 2;
 	struct buffer       *buffers             = NULL;
 
 	//process all the command line arguments
+/*
 	for (;;) 
 	{	
 		int index;
@@ -552,31 +549,32 @@ int main (int argc, char ** argv)
 				exit (EXIT_FAILURE);
 		}
 	}
-	
-	open_device (&fd, dev_name);
+*/	
+
+	open_device (&fd[0], "/dev/video0");
 	
 	//set the input if needed
 	if (set_inp==1)
-		set_input(&fd, dev_input);
+		set_input(&fd[0], dev_input);
 	
 	//set the standard if needed
 	if (set_std==1)
-		set_standard(&fd, dev_standard);
+		set_standard(&fd[0], dev_standard);
 
-	buffers = init_device (&fd, dev_name, width, height, &n_buffers, pixel_format);
+	buffers = init_device (&fd[0], dev_name, width, height, &n_buffers, pixel_format);
 
-	start_capturing (&fd, &n_buffers);
+	start_capturing (&fd[0], &n_buffers);
 
-	mainloop (&fd, width, height, &n_buffers, buffers, pixel_format);
+	mainloop (&fd[0], width, height, &n_buffers, buffers, pixel_format);
 
 	//TODO: main loop never exits, a break method must be implemented to execute 
 	//the following code
 
-	stop_capturing (&fd);
+	stop_capturing (&fd[0]);
 
 	uninit_device (&n_buffers, buffers);
 
-	close_device (&fd);
+	close_device (&fd[0]);
 
 	exit (EXIT_SUCCESS);
 
