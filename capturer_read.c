@@ -94,59 +94,6 @@ static int read_frame  (int * fd, int width, int height, int * n_buffers,
 //just the main loop of this program 
 static void mainloop (int * fd, int width, int height, int * n_buffers, struct buffer * buffers, int pixel_format)
 {
-	unsigned int count;
-
-	switch (pixel_format)
-	{
-		case 0: //YUV420
-			Bpp = 12/8;
-			break;
-		case 1: //RGB565
-			Bpp = 2;
-			break;
-		case 2: //RGB32
-			Bpp = 4;
-			break;
-	}
-
-	count = 100;
-	int i;
-//	for (i=0; i<2; i++) 
-	for (;;) 
-	{
-		fd_set fds;
-		struct timeval tv;
-		int r;
-
-		FD_ZERO (&fds);
-		FD_SET (*fd, &fds);
-
-		/* needed for select timeout */
-		tv.tv_sec = 2;
-		tv.tv_usec = 0;
-
-		//the classic select function, who allows to wait up to 2 seconds, until we have captured data,
-		r = select (*fd + 1, &fds, NULL, NULL, &tv);
-
-		if (-1 == r) 
-		{//error
-			if (EINTR == errno)
-				continue;
-			errno_exit ("select");
-		}
-
-		if (0 == r) 
-		{
-			fprintf (stderr, "select timeout\n");
-			exit (EXIT_FAILURE);
-		}
-
-		//read one frame from the device and put on the buffer
-		read_frame (fd, width, height, n_buffers, buffers, pixel_format);
-		
-		write(STDOUT_FILENO, buffers[4].start, width*height*4);
-					
-	}        
 }
 
 //dummy function, that represents the stop of capturing 
@@ -179,7 +126,7 @@ static void uninit_device (int * n_buffers, struct buffer * buffers)
 static struct buffer *init_read (unsigned int buffer_size)
 {
 	struct buffer *buffers = NULL;
-	buffers = calloc (5, sizeof (*buffers));
+	buffers = calloc (1, sizeof (*buffers));
 
 	if (!buffers) 
 	{
@@ -188,7 +135,7 @@ static struct buffer *init_read (unsigned int buffer_size)
 	}
 	buffers[0].length = buffer_size;
 	buffers[0].start = malloc (buffer_size);
-	buffers[1].length = buffer_size;
+/*	buffers[1].length = buffer_size;
 	buffers[1].start = malloc (buffer_size);
 	buffers[2].length = buffer_size;
 	buffers[2].start = malloc (buffer_size);
@@ -196,7 +143,7 @@ static struct buffer *init_read (unsigned int buffer_size)
 	buffers[3].start = malloc (buffer_size);
 	buffers[4].length = buffer_size;
 	buffers[4].start = malloc (buffer_size);
-
+*/
 	if (!buffers[0].start) 
 	{
 		fprintf (stderr, "Out of memory\n");
@@ -311,20 +258,20 @@ static void close_device (int * fd)
 	*fd = -1;
 }
 
-static void open_device (int * fd, char * dev_name)
+static int open_device (int * fd, char * dev_name)
 {
 	struct stat st; 
 
 	if (-1 == stat (dev_name, &st)) 
 	{
 		fprintf (stderr, "Cannot identify '%s': %d, %s\n", dev_name, errno, strerror (errno));
-		exit (EXIT_FAILURE);
+		return (EXIT_FAILURE);
 	}
 
 	if (!S_ISCHR (st.st_mode)) 
 	{
 		fprintf (stderr, "%s is no device\n", dev_name);
-		exit (EXIT_FAILURE);
+		return (EXIT_FAILURE);
 	}
 
 	*fd = open (dev_name, O_RDWR /* required */ | O_NONBLOCK, 0);
@@ -332,7 +279,7 @@ static void open_device (int * fd, char * dev_name)
 	if (-1 == *fd) 
 	{
 		fprintf (stderr, "Cannot open '%s': %d, %s\n", dev_name, errno, strerror (errno));
-		exit (EXIT_FAILURE);
+		return (EXIT_FAILURE);
 	}
 }
 
@@ -464,7 +411,7 @@ int main (int argc, char ** argv)
 	int                 dev_input;
 	int                 set_inp              = 0;
 	int                 set_std              = 0;
-	char                *dev_name            = "/dev/video0";
+	char                dev_name[20];//            = "/dev/video0";
 	int                 fd[4]                ;//= -1;
 	int                 width                = 720;
 	int                 height               = 576;
@@ -550,22 +497,96 @@ int main (int argc, char ** argv)
 		}
 	}
 */	
+	int	devs[] = {0,1,2,3};
+	int 	i;
+	int	have_dev = 0;
 
-	open_device (&fd[0], "/dev/video0");
-	
-	//set the input if needed
-	if (set_inp==1)
-		set_input(&fd[0], dev_input);
-	
-	//set the standard if needed
-	if (set_std==1)
-		set_standard(&fd[0], dev_standard);
+	for (i=0; i<4; i++){
+//		strcpy (dev_name, "/dev/video");
+//		strcat (dev_name, itoa(devs[i]));
+		sprintf(dev_name, "/dev/video%d", devs[i]);
+		printf("initializing %s\n", dev_name);
+		
 
-	buffers = init_device (&fd[0], dev_name, width, height, &n_buffers, pixel_format);
+		if (EXIT_FAILURE==open_device (&fd[i], dev_name)){
+			devs[i]=-1;
+			continue;
+		}
+	
+		//set the input if needed
+		if (set_inp==1)
+			set_input(&fd[i], dev_input);
+	
+		//set the standard if needed
+		if (set_std==1)
+			set_standard(&fd[i], dev_standard);
+
+		buffers = init_device (&fd[i], dev_name, width, height, &n_buffers, pixel_format);
+		have_dev = 1;
+	}
+
+	if (!have_dev){
+		printf("No available device found!\n");
+		exit(2);
+	}
+		
 
 	start_capturing (&fd[0], &n_buffers);
 
-	mainloop (&fd[0], width, height, &n_buffers, buffers, pixel_format);
+//	mainloop (&fd[0], width, height, &n_buffers, buffers, pixel_format);
+	unsigned int count;
+
+	switch (pixel_format)
+	{
+		case 0: //YUV420
+			Bpp = 12/8;
+			break;
+		case 1: //RGB565
+			Bpp = 2;
+			break;
+		case 2: //RGB32
+			Bpp = 4;
+			break;
+	}
+
+	count = 100;
+//	int i;
+//	for (i=0; i<2; i++) 
+	for (;;) 
+	{
+		fd_set fds;
+		struct timeval tv;
+		int r;
+
+		FD_ZERO (&fds);
+		FD_SET (*fd, &fds);
+
+		/* needed for select timeout */
+		tv.tv_sec = 2;
+		tv.tv_usec = 0;
+
+		//the classic select function, who allows to wait up to 2 seconds, until we have captured data,
+		r = select (*fd + 1, &fds, NULL, NULL, &tv);
+
+		if (-1 == r) 
+		{//error
+			if (EINTR == errno)
+				continue;
+			errno_exit ("select");
+		}
+
+		if (0 == r) 
+		{
+			fprintf (stderr, "select timeout\n");
+			exit (EXIT_FAILURE);
+		}
+
+		//read one frame from the device and put on the buffer
+		read_frame (fd, width, height, n_buffers, buffers, pixel_format);
+		
+		write(STDOUT_FILENO, buffers[4].start, width*height*4);
+					
+	}        
 
 	//TODO: main loop never exits, a break method must be implemented to execute 
 	//the following code
