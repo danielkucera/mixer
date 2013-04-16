@@ -103,7 +103,7 @@ static void mainloop (void *arg)
 	int buffer = (int) arg;
 
 	printf ("thread %d started\n", buffer);
-	return 0;
+//	return 0;
 
 	unsigned int count;
 
@@ -124,6 +124,7 @@ static void mainloop (void *arg)
 
 	for (;;) 
 	{
+//		printf("loop");
 		fd_set fds;
 		struct timeval tv;
 		int r;
@@ -152,9 +153,9 @@ static void mainloop (void *arg)
 		}
 
 		//read one frame from the device and put on the buffer
-		if (!read_frame (&fd[buffer], width, height, &buffer, &buffers[buffer], pixel_format))
-			printf("skipped frame?\n");
-		
+		read_frame (&fd[buffer], width, height, &buffer, &buffers[buffer], pixel_format);
+//			printf("skipped frame?\n");
+//		printf("frejm %d\n", buffer);
 	}        
 }
 
@@ -555,13 +556,14 @@ int main (int argc, char ** argv)
 	int	devs[] = {0,1,2,3};
 	int 	i;
 	int	have_dev = 0;
+	pthread_t thread[3];
 
 	for (i=0; i<4; i++){
 		sprintf(dev_name, "/dev/video%d", devs[i]);
 		printf("initializing %s\n", dev_name);
 		
 
-		if (EXIT_FAILURE==open_device (&fd[i], dev_name)){
+		if (!open_device (&fd[i], dev_name)){
 			devs[i]=-1;
 			continue;
 		}
@@ -593,6 +595,8 @@ int main (int argc, char ** argv)
 
 		start_capturing (&fd[i], &n_buffers);
 
+		pthread_create(&thread[i], NULL, mainloop, (void *)i);
+		
 		have_dev = 1;
 	}
 
@@ -602,11 +606,9 @@ int main (int argc, char ** argv)
 	}
 		
 
-	pthread_t thread[3];
 
 	int p;
 	for (p = 0; p < 4; p++) {
-		pthread_create(&thread[p], NULL, mainloop, (void *)p);
 	}
 
 	buffers[0].length = width*height*4;
@@ -614,12 +616,23 @@ int main (int argc, char ** argv)
 
 	FILE *fp;
 	fp = fopen("/tmp/preview", "w");
+//	pipe (fp);
 
 	while (1){
-	printf("0\n");
-	usleep(200000); //= 5 fps
-        fwrite(buffers[0].start,1, width*height*4, fp);
-	printf("*\n");
+		printf("0\n");
+
+		usleep(200000); //= 5 fps
+
+//		if (fp){
+			fwrite(buffers[1].start,1, width*height*4, fp);
+//		} else {
+//			fp = fopen("/tmp/preview", "w");
+//		}
+//		if (ftell(fp)>1024*1024*100){
+//			rewind(fp);
+//		}
+
+		printf("*\n");
 	}
 
 	pthread_join(thread[0], NULL);
