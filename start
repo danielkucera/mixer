@@ -1,0 +1,1 @@
+./capturer_read -D /dev/video1 -w 640*480 -p 2 | mplayer -demuxer rawvideo - -rawvideo w=640:h=480:format=rgb32
