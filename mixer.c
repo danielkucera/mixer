@@ -45,6 +45,9 @@ int		height		= 576;
 struct buffer	buffers[7];
 int		pixel_format	= 2;
 int		devs[]		= {0,1,2,3};
+int		out;
+int		prev_fps	= 5;
+int		frame[4];
 
 static void errno_exit (const char *s)
 {
@@ -82,6 +85,7 @@ static int read_frame  (int * fd, int width, int height, int * n_buffers,
 			default:
 				errno_exit ("read");
 		}
+		return 0;
 	}
 	return 1;
 }
@@ -197,7 +201,7 @@ static int init_device (int * fd, char * dev_name, int width,
 	fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_UYVY;
 	//fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUV420;
 	//fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB24;
-	//fmt.fmt.pix.colorspace  = V4L2_COLORSPACE_SRGB;
+	fmt.fmt.pix.colorspace  = V4L2_COLORSPACE_SRGB;
 	fmt.fmt.pix.field       = V4L2_FIELD_INTERLACED;
 
 	switch (pixel_format) 
@@ -212,6 +216,9 @@ static int init_device (int * fd, char * dev_name, int width,
 			fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB32;
 			break;
 	}
+	
+	fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB32; //lasdlalsdaslda
+
 	if (-1 == xioctl (*fd, VIDIOC_S_FMT, &fmt))
 		errno_exit ("VIDIOC_S_FMT");
 
@@ -412,20 +419,22 @@ static void mainloop (void *arg)
 	}
 
 	count = 100;
+	frame[buffer]=0;
+
+	int r;
+	fd_set fds;
+	struct timeval tv;
 
 	for (;;) 
 	{
 //		printf("loop");
-		fd_set fds;
-		struct timeval tv;
-		int r;
-
-		FD_ZERO (&fds);
-		FD_SET (fd[buffer], &fds);
 
 		/* needed for select timeout */
 		tv.tv_sec = 2;
 		tv.tv_usec = 0;
+
+		FD_ZERO (&fds);
+		FD_SET (fd[buffer], &fds);
 
 		//the classic select function, who allows to wait up to 2 seconds, until we have captured data,
 		r = select (fd[buffer] + 1, &fds, NULL, NULL, &tv);
@@ -444,8 +453,10 @@ static void mainloop (void *arg)
 		}
 
 		//read one frame from the device and put on the buffer
-		read_frame (&fd[buffer], width, height, &buffer, &buffers[buffer], pixel_format);
-//			printf("skipped frame?\n");
+		if(read_frame(&fd[buffer], width, height, &buffer, &buffers[buffer], pixel_format))
+			frame[buffer]++;
+
+//		printf("skipped frame?\n");
 //		printf("frejm %d\n", buffer);
 	}       
 
@@ -468,11 +479,11 @@ void preview_thread(void *arg){
 //	fp = fopen("/tmp/preview", "w");
 //	pipe (fp);
 
-	while (1){
-		usleep(100*1000); //= 5 fps
-	
-		int x, y;
+	int x, y;
 
+	while (1){
+		usleep(1000*1000/prev_fps); //= 5 fps
+	
 		if (devs[0]!=-1){
 			for (y=0; y<height/2; y++){
 				for (x=0; x<width/2; x++){
@@ -512,11 +523,48 @@ void preview_thread(void *arg){
 			fp = popen("mplayer -demuxer rawvideo - -rawvideo w=720:h=576:format=rgb32 2>/dev/null >/dev/null", "w");
 		}
 
-		printf("*");
-		fflush(stdout);
+//		printf("*");
+//		fflush(stdout);
 	}
 }
 
+void output_thread(void *arg){
+	FILE *fp = NULL;
+	int u_frame=0;
+	int len=Bpp*width*height;
+	struct buffer output;
+        output.length = width*height*4;
+        output.start = malloc (width*height*4);
+
+
+	printf("output thread started\n");
+//	fp = fopen("/tmp/preview", "w");
+//	pipe (fp);
+	fp = popen("mplayer -demuxer rawvideo - -rawvideo w=720:h=576:format=bgr32:size=1658880 2>/dev/null #>/dev/null", "w");
+
+	while (1){
+
+//		usleep(1000*1000/25); // 25fps
+
+		if (frame[out]!=u_frame){
+//			usleep(10*1000);
+			u_frame=frame[out];
+
+	//		if (fp){
+				memcpy(output.start, buffers[out].start, len);
+				fwrite(output.start,4, width*height, fp);
+//			} else {
+	//			fp = popen("cat > /tmp/kokosy", "w");
+//			}
+
+	//		printf("*");
+	//		fflush(stdout);
+
+		} else {
+			usleep(3000);
+		}
+	}
+}
 int main (int argc, char ** argv)
 {
 
@@ -614,6 +662,7 @@ int main (int argc, char ** argv)
 	int	have_dev = 0;
 	pthread_t thread[3];
 	pthread_t prev_thread;
+	pthread_t out_thread;
 
 	for (i=0; i<4; i++){
 		sprintf(dev_name, "/dev/video%d", devs[i]);
@@ -662,10 +711,48 @@ int main (int argc, char ** argv)
 //		exit(2);
 	}
 		
+	out=0;
+
 	pthread_create(&prev_thread, NULL, preview_thread, NULL);
+	pthread_create(&out_thread, NULL, output_thread, NULL);
+
+	int input;
+	char in;
 
 	while(1){
-	usleep(1000000);
+		system("clear");
+		printf("0-3 change input; q/Q - exit; k,o - preview fps up,down\n");
+		printf("Preview: %d fps Input: %d\n",prev_fps,out);
+		system("/bin/stty raw");
+//		scanf("%d",&input);
+		in=getchar();
+		system("/bin/stty cooked");
+//		input=atoi(getchar());
+		
+		if ((in< 52) && (in>47)){
+			out=in-48;
+		}
+		switch(in){
+			case 81:
+			case 113:
+				exit(0); break;
+			case 107:
+				prev_fps--; break;
+			case 111:
+				prev_fps++; break;
+			
+		}
+/*		if ((in==81) || (in==113))
+			exit(0);
+		if (in==107){
+			prev_fps--;
+		}
+		if (in==111){
+			prev_fps++;
+		}
+*/
+		printf("\n%d\n", in);
+//		out=input-1;
 	}
 
 	pthread_join(thread[0], NULL);
