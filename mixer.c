@@ -484,7 +484,7 @@ void preview_thread(void *arg){
 		if (devs[1]!=-1){
 			for (y=0; y<height/2; y++){
 				for (x=0; x<width/2; x++){
-					memcpy((preview.start+(width*y*Bpp)+(x+width/2)*Bpp), (buffers[0].start+(width*y*Bpp*2)+x*Bpp), Bpp);
+					memcpy((preview.start+(width*y*Bpp)+(x+width/2)*Bpp), (buffers[1].start+(width*y*Bpp*2)+x*Bpp), Bpp);
 				}
 			}
 		}
@@ -492,7 +492,7 @@ void preview_thread(void *arg){
 		if (devs[2]!=-1){
 			for (y=0; y<height/2; y++){
 				for (x=0; x<width/2; x++){
-					memcpy((preview.start+(width*(y+height/2)*Bpp)+x*Bpp), (buffers[0].start+(width*y*Bpp*2)+x*Bpp), Bpp);
+					memcpy((preview.start+(width*(y+height/2)*Bpp)+x*Bpp), (buffers[2].start+(width*y*Bpp*2)+x*Bpp), Bpp);
 				}
 			}
 		}
@@ -500,7 +500,7 @@ void preview_thread(void *arg){
 		if (devs[3]!=-1){
 			for (y=0; y<height/2; y++){
 				for (x=0; x<width/2; x++){
-					memcpy((preview.start+(width*(y+height/2)*Bpp)+(x+width/2)*Bpp), (buffers[0].start+(width*y*Bpp*2)+x*Bpp), Bpp);
+					memcpy((preview.start+(width*(y+height/2)*Bpp)+(x+width/2)*Bpp), (buffers[3].start+(width*y*Bpp*2)+x*Bpp), Bpp);
 				}
 			}
 		}
@@ -508,8 +508,8 @@ void preview_thread(void *arg){
 		if (fp){
 			fwrite(preview.start,1, width*height*4, fp);
 		} else {
-			fp = popen("cat > /tmp/kokosy", "w");
-//			fp = popen("mplayer -demuxer rawvideo - -rawvideo w=640:h=480:format=rgb32", "w");
+//			fp = popen("cat > /tmp/kokosy", "w");
+			fp = popen("mplayer -demuxer rawvideo - -rawvideo w=720:h=576:format=rgb32 2>/dev/null >/dev/null", "w");
 		}
 
 		printf("*");
