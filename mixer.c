@@ -44,6 +44,7 @@ int		width		= 720;
 int		height		= 576;
 struct buffer	buffers[7];
 int		pixel_format	= 2;
+int		devs[]		= {0,1,2,3};
 
 static void errno_exit (const char *s)
 {
@@ -82,81 +83,7 @@ static int read_frame  (int * fd, int width, int height, int * n_buffers,
 				errno_exit ("read");
 		}
 	}
-
-/*
-	int ret;
-	//writing to standard output
-	int x;
-	int y;
-	for (y=0; y<height/2; y++){
-		for (x=0; x<width/2; x++){
-			memcpy((buffers[4].start+(int)(width*y*Bpp)+x*Bpp), (buffers[0].start+(width*y*Bpp*2)+x*Bpp), Bpp);
-		}
-	}
-*/
 	return 1;
-}
-
-//just the main loop of this program 
-static void mainloop (void *arg)
-{
-	int buffer = (int) arg;
-
-	printf ("thread %d started\n", buffer);
-//	return 0;
-
-	unsigned int count;
-
-	switch (pixel_format)
-	{
-		case 0: //YUV420
-			Bpp = 12/8;
-			break;
-		case 1: //RGB565
-			Bpp = 2;
-			break;
-		case 2: //RGB32
-			Bpp = 4;
-			break;
-	}
-
-	count = 100;
-
-	for (;;) 
-	{
-//		printf("loop");
-		fd_set fds;
-		struct timeval tv;
-		int r;
-
-		FD_ZERO (&fds);
-		FD_SET (fd[buffer], &fds);
-
-		/* needed for select timeout */
-		tv.tv_sec = 2;
-		tv.tv_usec = 0;
-
-		//the classic select function, who allows to wait up to 2 seconds, until we have captured data,
-		r = select (fd[buffer] + 1, &fds, NULL, NULL, &tv);
-
-		if (-1 == r) 
-		{//error
-			if (EINTR == errno)
-				continue;
-			errno_exit ("select");
-		}
-
-		if (0 == r) 
-		{
-			fprintf (stderr, "select timeout\n");
-			exit (EXIT_FAILURE);
-		}
-
-		//read one frame from the device and put on the buffer
-		read_frame (&fd[buffer], width, height, &buffer, &buffers[buffer], pixel_format);
-//			printf("skipped frame?\n");
-//		printf("frejm %d\n", buffer);
-	}        
 }
 
 //dummy function, that represents the stop of capturing 
@@ -321,13 +248,13 @@ static int open_device (int * fd, char * dev_name)
 	if (-1 == stat (dev_name, &st)) 
 	{
 		fprintf (stderr, "Cannot identify '%s': %d, %s\n", dev_name, errno, strerror (errno));
-		return (EXIT_FAILURE);
+		return 0;
 	}
 
 	if (!S_ISCHR (st.st_mode)) 
 	{
 		fprintf (stderr, "%s is no device\n", dev_name);
-		return (EXIT_FAILURE);
+		return 0;
 	}
 
 	*fd = open (dev_name, O_RDWR /* required */ | O_NONBLOCK, 0);
@@ -335,8 +262,9 @@ static int open_device (int * fd, char * dev_name)
 	if (-1 == *fd) 
 	{
 		fprintf (stderr, "Cannot open '%s': %d, %s\n", dev_name, errno, strerror (errno));
-		return (EXIT_FAILURE);
+		return 0;
 	}
+	return 1;
 }
 
 //show the usage
@@ -460,6 +388,135 @@ typedef enum
 	PIX_FMT_RGB32
 } pix_fmt;
 
+//just the main loop of this program 
+static void mainloop (void *arg)
+{
+	int buffer = (int) arg;
+
+	printf ("thread %d started\n", buffer);
+//	return 0;
+
+	unsigned int count;
+
+	switch (pixel_format)
+	{
+		case 0: //YUV420
+			Bpp = 12/8;
+			break;
+		case 1: //RGB565
+			Bpp = 2;
+			break;
+		case 2: //RGB32
+			Bpp = 4;
+			break;
+	}
+
+	count = 100;
+
+	for (;;) 
+	{
+//		printf("loop");
+		fd_set fds;
+		struct timeval tv;
+		int r;
+
+		FD_ZERO (&fds);
+		FD_SET (fd[buffer], &fds);
+
+		/* needed for select timeout */
+		tv.tv_sec = 2;
+		tv.tv_usec = 0;
+
+		//the classic select function, who allows to wait up to 2 seconds, until we have captured data,
+		r = select (fd[buffer] + 1, &fds, NULL, NULL, &tv);
+
+		if (-1 == r) 
+		{//error
+			if (EINTR == errno)
+				continue;
+			errno_exit ("select");
+		}
+
+		if (0 == r) 
+		{
+			fprintf (stderr, "select timeout\n");
+			exit (EXIT_FAILURE);
+		}
+
+		//read one frame from the device and put on the buffer
+		read_frame (&fd[buffer], width, height, &buffer, &buffers[buffer], pixel_format);
+//			printf("skipped frame?\n");
+//		printf("frejm %d\n", buffer);
+	}       
+
+	stop_capturing (&fd[buffer]);
+
+	uninit_device (&buffers, buffers);
+
+	close_device (&fd[buffer]);
+
+}
+
+void preview_thread(void *arg){
+	FILE *fp = NULL;
+	struct buffer preview;
+
+	preview.length = width*height*4;
+	preview.start = malloc (width*height*4);
+
+	printf("preview thread started\n");
+//	fp = fopen("/tmp/preview", "w");
+//	pipe (fp);
+
+	while (1){
+		usleep(100*1000); //= 5 fps
+	
+		int x, y;
+
+		if (devs[0]!=-1){
+			for (y=0; y<height/2; y++){
+				for (x=0; x<width/2; x++){
+					memcpy((preview.start+(width*y*Bpp)+x*Bpp), (buffers[0].start+(width*y*Bpp*2)+x*Bpp), Bpp);
+				}
+			}
+		}
+
+		if (devs[1]!=-1){
+			for (y=0; y<height/2; y++){
+				for (x=0; x<width/2; x++){
+					memcpy((preview.start+(width*y*Bpp)+(x+width/2)*Bpp), (buffers[0].start+(width*y*Bpp*2)+x*Bpp), Bpp);
+				}
+			}
+		}
+
+		if (devs[2]!=-1){
+			for (y=0; y<height/2; y++){
+				for (x=0; x<width/2; x++){
+					memcpy((preview.start+(width*(y+height/2)*Bpp)+x*Bpp), (buffers[0].start+(width*y*Bpp*2)+x*Bpp), Bpp);
+				}
+			}
+		}
+
+		if (devs[3]!=-1){
+			for (y=0; y<height/2; y++){
+				for (x=0; x<width/2; x++){
+					memcpy((preview.start+(width*(y+height/2)*Bpp)+(x+width/2)*Bpp), (buffers[0].start+(width*y*Bpp*2)+x*Bpp), Bpp);
+				}
+			}
+		}
+
+		if (fp){
+			fwrite(preview.start,1, width*height*4, fp);
+		} else {
+			fp = popen("cat > /tmp/kokosy", "w");
+//			fp = popen("mplayer -demuxer rawvideo - -rawvideo w=640:h=480:format=rgb32", "w");
+		}
+
+		printf("*");
+		fflush(stdout);
+	}
+}
+
 int main (int argc, char ** argv)
 {
 
@@ -553,10 +610,10 @@ int main (int argc, char ** argv)
 		}
 	}
 */	
-	int	devs[] = {0,1,2,3};
 	int 	i;
 	int	have_dev = 0;
 	pthread_t thread[3];
+	pthread_t prev_thread;
 
 	for (i=0; i<4; i++){
 		sprintf(dev_name, "/dev/video%d", devs[i]);
@@ -605,34 +662,10 @@ int main (int argc, char ** argv)
 //		exit(2);
 	}
 		
+	pthread_create(&prev_thread, NULL, preview_thread, NULL);
 
-
-	int p;
-	for (p = 0; p < 4; p++) {
-	}
-
-	buffers[0].length = width*height*4;
-	buffers[0].start = malloc (width*height*4);
-
-	FILE *fp;
-	fp = fopen("/tmp/preview", "w");
-//	pipe (fp);
-
-	while (1){
-		printf("0\n");
-
-		usleep(200000); //= 5 fps
-
-//		if (fp){
-			fwrite(buffers[1].start,1, width*height*4, fp);
-//		} else {
-//			fp = fopen("/tmp/preview", "w");
-//		}
-//		if (ftell(fp)>1024*1024*100){
-//			rewind(fp);
-//		}
-
-		printf("*\n");
+	while(1){
+	usleep(1000000);
 	}
 
 	pthread_join(thread[0], NULL);
@@ -647,13 +680,7 @@ int main (int argc, char ** argv)
 					
 	//TODO: main loop never exits, a break method must be implemented to execute 
 	//the following code
-
-	stop_capturing (&fd[0]);
-
-	uninit_device (&n_buffers, buffers);
-
-	close_device (&fd[0]);
-
+	
 	exit (EXIT_SUCCESS);
 
 }
