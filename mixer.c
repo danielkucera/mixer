@@ -26,11 +26,14 @@ version 0.4 - The same of 0.3 but in English (November 2009)
 #include <sys/stat.h>
 #include <asm/types.h>          /* for videodev2.h */
 #include <linux/videodev2.h>
+#include <time.h> 		//profiling
 
 #define CLEAR(x) memset (&(x), 0, sizeof (x))
 
 #define MAX_INPUT   16
 #define MAX_NORM    16
+
+#define MPLAYER "mplayer -demuxer rawvideo - -rawvideo w=720:h=576:format=rgb32 2>/dev/null >/dev/null"
 
 //info needed to store one video frame in memory
 struct buffer {    
@@ -48,6 +51,27 @@ int		devs[]		= {0,1,2,3};
 int		out;
 int		prev_fps	= 5;
 int		frame[4];
+struct timespec	start;
+
+
+static void logtime(char * text, int id){
+struct timespec now;
+struct timespec temp;
+
+clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &now);
+
+if ((now.tv_nsec-start.tv_nsec)<0){
+temp.tv_sec = now.tv_sec - start.tv_sec - 1;
+temp.tv_nsec = 1000000000 + now.tv_nsec - start.tv_nsec;
+} else {
+temp.tv_sec = now.tv_sec - start.tv_sec;
+temp.tv_nsec = now.tv_nsec - start.tv_nsec;
+}
+
+
+//printf("%lld.%.9ld: %d %s\n", (long long)temp.tv_sec, temp.tv_nsec, id, text);
+
+}
 
 static void errno_exit (const char *s)
 {
@@ -70,10 +94,8 @@ static int xioctl (int fd, int request, void *arg)
 static int read_frame  (int * fd, int width, int height, int * n_buffers,
 						struct buffer * buffers, int pixel_format)
 {
-	unsigned int Bpf; //bytes per frame
-	unsigned int i;
 
-	if (-1 == read (*fd, buffers[0].start, buffers[0].length)) 
+	if (-1 == read (*fd, buffers[0].start-1, buffers[0].length)) 
 	{
 		switch (errno) 
 		{
@@ -405,19 +427,6 @@ static void mainloop (void *arg)
 
 	unsigned int count;
 
-	switch (pixel_format)
-	{
-		case 0: //YUV420
-			Bpp = 12/8;
-			break;
-		case 1: //RGB565
-			Bpp = 2;
-			break;
-		case 2: //RGB32
-			Bpp = 4;
-			break;
-	}
-
 	count = 100;
 	frame[buffer]=0;
 
@@ -453,8 +462,12 @@ static void mainloop (void *arg)
 		}
 
 		//read one frame from the device and put on the buffer
+		logtime ("pred read", buffer);
+
 		if(read_frame(&fd[buffer], width, height, &buffer, &buffers[buffer], pixel_format))
 			frame[buffer]++;
+
+		logtime ("po read", buffer);
 
 //		printf("skipped frame?\n");
 //		printf("frejm %d\n", buffer);
@@ -520,7 +533,7 @@ void preview_thread(void *arg){
 			fwrite(preview.start,1, width*height*4, fp);
 		} else {
 //			fp = popen("cat > /tmp/kokosy", "w");
-			fp = popen("mplayer -demuxer rawvideo - -rawvideo w=720:h=576:format=rgb32 2>/dev/null >/dev/null", "w");
+			fp = popen(MPLAYER, "w");
 		}
 
 //		printf("*");
@@ -540,7 +553,7 @@ void output_thread(void *arg){
 	printf("output thread started\n");
 //	fp = fopen("/tmp/preview", "w");
 //	pipe (fp);
-	fp = popen("mplayer -demuxer rawvideo - -rawvideo w=720:h=576:format=bgr32:size=1658880 2>/dev/null #>/dev/null", "w");
+	fp = popen(MPLAYER, "w");
 
 	while (1){
 
@@ -663,6 +676,8 @@ int main (int argc, char ** argv)
 	pthread_t thread[3];
 	pthread_t prev_thread;
 	pthread_t out_thread;
+
+	Bpp = 4;
 
 	for (i=0; i<4; i++){
 		sprintf(dev_name, "/dev/video%d", devs[i]);
