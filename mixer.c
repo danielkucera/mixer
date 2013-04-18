@@ -26,11 +26,14 @@ version 0.4 - The same of 0.3 but in English (November 2009)
 #include <sys/stat.h>
 #include <asm/types.h>          /* for videodev2.h */
 #include <linux/videodev2.h>
+#include <time.h>	//profiling
 
 #define CLEAR(x) memset (&(x), 0, sizeof (x))
 
 #define MAX_INPUT   16
 #define MAX_NORM    16
+
+#define MPLAYER "mplayer -demuxer rawvideo - -rawvideo w=720:h=576:format=rgb32 2>/dev/null >/dev/null"
 
 //info needed to store one video frame in memory
 struct buffer {    
@@ -44,15 +47,37 @@ int		width		= 720;
 int		height		= 576;
 struct buffer	buffers[7];
 int		pixel_format	= 2;
-int		devs[]		= {0,1,2,3};
+int		devs[]		= {0,1,3,2};
 int		out;
 int		prev_fps	= 5;
 int		frame[4];
+int             n_buffers[4];
+
+struct timespec	start;
 
 static void errno_exit (const char *s)
 {
 	fprintf (stderr, "%s error %d, %s\n",s, errno, strerror (errno));
 	exit (EXIT_FAILURE);
+}
+
+static void logtime(char * text, int id){
+	struct timespec now;
+	struct timespec temp;
+
+	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &now);
+
+	if ((now.tv_nsec-start.tv_nsec)<0){
+		temp.tv_sec = now.tv_sec - start.tv_sec - 1;
+		temp.tv_nsec = 1000000000 + now.tv_nsec - start.tv_nsec;
+	} else {
+		temp.tv_sec = now.tv_sec - start.tv_sec;
+		temp.tv_nsec = now.tv_nsec - start.tv_nsec;
+	}
+
+	
+	printf("%lld.%.9ld: %d %s\n", (long long)temp.tv_sec, temp.tv_nsec, id, text);
+
 }
 
 //a blocking wrapper of the ioctl function
@@ -70,8 +95,7 @@ static int xioctl (int fd, int request, void *arg)
 static int read_frame  (int * fd, int width, int height, int * n_buffers,
 						struct buffer * buffers, int pixel_format)
 {
-	unsigned int Bpf; //bytes per frame
-	unsigned int i;
+//	usleep (15*1000);
 
 	if (-1 == read (*fd, buffers[0].start, buffers[0].length)) 
 	{
@@ -81,14 +105,68 @@ static int read_frame  (int * fd, int width, int height, int * n_buffers,
 				return 0;
 
 			case EIO:
-								//EIO ignored
+				return 0;				//EIO ignored
 			default:
 				errno_exit ("read");
 		}
 		return 0;
 	}
+
 	return 1;
 }
+
+//read one frame from memory and throws the data to standard output
+/*
+static int read_frame  (int * fd, int width, int height, int * n_buffers, 
+						struct buffer * buffers, int pixel_format)
+{
+	struct v4l2_buffer buf;//needed for memory mapping
+	unsigned int i;
+	unsigned int Bpf;//bytes per frame
+
+	CLEAR (buf);
+
+	buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	buf.memory = V4L2_MEMORY_MMAP;
+
+	if (-1 == xioctl (*fd, VIDIOC_DQBUF, &buf)) 
+	{
+		switch (errno) 
+		{
+			case EAGAIN:
+				return 0;
+
+			case EIO://EIO ignored
+
+			default:
+				errno_exit ("VIDIOC_DQBUF");
+		}
+	}
+			
+	assert (buf.index < *n_buffers);
+
+	switch (pixel_format) 
+	{  
+		case 0: //YUV420
+			Bpf = width*height*12/8;           
+			break;
+		case 1: //RGB565
+			Bpf = width*height*2;
+			break;
+		case 2: //RGB32
+			Bpf = width*height*4;
+		break;
+	}
+
+	int ret;
+	//writing to standard output
+	ret = write(STDOUT_FILENO, buffers[buf.index].start, Bpf);
+	if (-1 == xioctl (*fd, VIDIOC_QBUF, &buf))
+		errno_exit ("VIDIOC_QBUF");
+
+	return 1;
+}
+*/
 
 //dummy function, that represents the stop of capturing 
 static void stop_capturing (int * fd)
@@ -201,8 +279,10 @@ static int init_device (int * fd, char * dev_name, int width,
 	fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_UYVY;
 	//fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUV420;
 	//fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB24;
-	fmt.fmt.pix.colorspace  = V4L2_COLORSPACE_SRGB;
+//	fmt.fmt.pix.colorspace  = V4L2_COLORSPACE_SRGB;
+	fmt.fmt.pix.colorspace  = V4L2_COLORSPACE_SMPTE170M;
 	fmt.fmt.pix.field       = V4L2_FIELD_INTERLACED;
+//	fmt.fmt.pix.field       = V4L2_FIELD_BOTTOM;
 
 	switch (pixel_format) 
 	{
@@ -392,7 +472,8 @@ typedef enum
 {      
 	PIX_FMT_YUV420P,
 	PIX_FMT_RGB565,
-	PIX_FMT_RGB32
+	PIX_FMT_RGB32,
+	PIX_FMT_RGB24
 } pix_fmt;
 
 //just the main loop of this program 
@@ -418,6 +499,8 @@ static void mainloop (void *arg)
 			break;
 	}
 
+	Bpp=4;
+
 	count = 100;
 	frame[buffer]=0;
 
@@ -430,7 +513,7 @@ static void mainloop (void *arg)
 //		printf("loop");
 
 		/* needed for select timeout */
-		tv.tv_sec = 2;
+/*		tv.tv_sec = 2;
 		tv.tv_usec = 0;
 
 		FD_ZERO (&fds);
@@ -451,10 +534,17 @@ static void mainloop (void *arg)
 			fprintf (stderr, "select timeout\n");
 			exit (EXIT_FAILURE);
 		}
-
+*/
 		//read one frame from the device and put on the buffer
-		if(read_frame(&fd[buffer], width, height, &buffer, &buffers[buffer], pixel_format))
+
+		for (buffer=0; buffer<4; buffer++){
+		logtime ("pred read", buffer);
+
+		if(read_frame(&fd[buffer], width, height, &n_buffers[buffer], &buffers[buffer], pixel_format))
 			frame[buffer]++;
+
+		logtime ("po read", buffer);
+		}
 
 //		printf("skipped frame?\n");
 //		printf("frejm %d\n", buffer);
@@ -472,8 +562,8 @@ void preview_thread(void *arg){
 	FILE *fp = NULL;
 	struct buffer preview;
 
-	preview.length = width*height*4;
-	preview.start = malloc (width*height*4);
+	preview.length = width*height*Bpp;
+	preview.start = malloc (width*height*Bpp);
 
 	printf("preview thread started\n");
 //	fp = fopen("/tmp/preview", "w");
@@ -487,7 +577,7 @@ void preview_thread(void *arg){
 		if (devs[0]!=-1){
 			for (y=0; y<height/2; y++){
 				for (x=0; x<width/2; x++){
-					memcpy((preview.start+(width*y*Bpp)+x*Bpp), (buffers[0].start+(width*y*Bpp*2)+x*Bpp), Bpp);
+					memcpy((preview.start+(width*y*Bpp)+x*Bpp), (buffers[0].start+(width*y*Bpp*2)+x*Bpp)+1, Bpp);
 				}
 			}
 		}
@@ -495,7 +585,7 @@ void preview_thread(void *arg){
 		if (devs[1]!=-1){
 			for (y=0; y<height/2; y++){
 				for (x=0; x<width/2; x++){
-					memcpy((preview.start+(width*y*Bpp)+(x+width/2)*Bpp), (buffers[1].start+(width*y*Bpp*2)+x*Bpp), Bpp);
+					memcpy((preview.start+(width*y*Bpp)+(x+width/2)*Bpp), (buffers[1].start+(width*y*Bpp*2)+x*Bpp)+1, Bpp);
 				}
 			}
 		}
@@ -503,7 +593,7 @@ void preview_thread(void *arg){
 		if (devs[2]!=-1){
 			for (y=0; y<height/2; y++){
 				for (x=0; x<width/2; x++){
-					memcpy((preview.start+(width*(y+height/2)*Bpp)+x*Bpp), (buffers[2].start+(width*y*Bpp*2)+x*Bpp), Bpp);
+					memcpy((preview.start+(width*(y+height/2)*Bpp)+x*Bpp), (buffers[2].start+(width*y*Bpp*2)+x*Bpp)+1, Bpp);
 				}
 			}
 		}
@@ -511,16 +601,16 @@ void preview_thread(void *arg){
 		if (devs[3]!=-1){
 			for (y=0; y<height/2; y++){
 				for (x=0; x<width/2; x++){
-					memcpy((preview.start+(width*(y+height/2)*Bpp)+(x+width/2)*Bpp), (buffers[3].start+(width*y*Bpp*2)+x*Bpp), Bpp);
+					memcpy((preview.start+(width*(y+height/2)*Bpp)+(x+width/2)*Bpp), (buffers[3].start+(width*y*Bpp*2)+x*Bpp)+1, Bpp);
 				}
 			}
 		}
 
 		if (fp){
-			fwrite(preview.start,1, width*height*4, fp);
+			fwrite(preview.start,1, width*height*Bpp, fp);
 		} else {
 //			fp = popen("cat > /tmp/kokosy", "w");
-			fp = popen("mplayer -demuxer rawvideo - -rawvideo w=720:h=576:format=rgb32 2>/dev/null >/dev/null", "w");
+			fp = popen(MPLAYER, "w");
 		}
 
 //		printf("*");
@@ -533,14 +623,14 @@ void output_thread(void *arg){
 	int u_frame=0;
 	int len=Bpp*width*height;
 	struct buffer output;
-        output.length = width*height*4;
-        output.start = malloc (width*height*4);
+        output.length = width*height*Bpp;
+        output.start = malloc (width*height*Bpp);
 
 
 	printf("output thread started\n");
 //	fp = fopen("/tmp/preview", "w");
 //	pipe (fp);
-	fp = popen("mplayer -demuxer rawvideo - -rawvideo w=720:h=576:format=bgr32:size=1658880 2>/dev/null #>/dev/null", "w");
+	fp = popen(MPLAYER, "w");
 
 	while (1){
 
@@ -551,8 +641,8 @@ void output_thread(void *arg){
 			u_frame=frame[out];
 
 	//		if (fp){
-				memcpy(output.start, buffers[out].start, len);
-				fwrite(output.start,4, width*height, fp);
+				memcpy(output.start, buffers[out].start+1, len);
+				fwrite(output.start,Bpp, width*height, fp);
 //			} else {
 	//			fp = popen("cat > /tmp/kokosy", "w");
 //			}
@@ -576,93 +666,21 @@ int main (int argc, char ** argv)
 //	int                 fd[4]                ;//= -1;
 //	int                 width                = 720;
 //	int                 height               = 576;
-	int                 n_buffers;
+//	int                 n_buffers;
 //	int                 pixel_format         = 2;
 //	struct buffer       buffers[7];//             = NULL;
 
 	//process all the command line arguments
-/*
-	for (;;) 
-	{	
-		int index;
-		int c;
-				
-		c = getopt_long (argc, argv,short_options, long_options,&index);
-
-		if (-1 == c)
-			break; //no more arguments (quit from for)
-
-		switch (c) 
-		{
-			case 0: // getopt_long() flag
-				break;
-
-			case 'D':
-				dev_name = optarg;
-				break;
-					
-			case 'd':
-				dev_name = optarg;
-				open_device (&fd,dev_name);
-				printf("\n");
-				printf("Device info: %s\n\n",dev_name);
-				enum_inputs(&fd);
-				printf("\n");
-				enum_standards(&fd);
-				printf("\n");
-				close_device (&fd);
-				exit (EXIT_SUCCESS);
-				//break;
-				
-			case 'i':  
-				dev_input = atoi(optarg);              
-				set_inp=1;
-				break;
-
-			case 's':
-				dev_standard = atoi(optarg);
-				set_std=1;
-				break;
-
-			case 'w':
-				if (strcmp(optarg,"640*480")==0)
-				{
-					printf("window size 640*480\n");
-					width=640;
-					height=480;
-				}
-				if (strcmp(optarg,"320*240")==0)
-				{
-					printf("window size 320*240\n");
-					width=320;
-					height=240;
-				}
-				if ((strcmp(optarg,"320*240")!=0)&&(strcmp(optarg,"640*480")!=0))
-				{
-					printf("\nError: window size not supported\n");
-					exit(EXIT_FAILURE);
-				}                
-				break;
-				
-			case 'p':
-				pixel_format=atoi(optarg);
-				break;
-
-			case 'h':
-				usage (stdout, argc, argv);
-				exit (EXIT_SUCCESS);
-
-			default:
-				usage (stderr, argc, argv);
-				exit (EXIT_FAILURE);
-		}
-	}
-*/	
+	
 	int 	i;
 	int	have_dev = 0;
 	pthread_t thread[3];
 	pthread_t prev_thread;
 	pthread_t out_thread;
+
+	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start);
+
+	Bpp = 4;
 
 	for (i=0; i<4; i++){
 		sprintf(dev_name, "/dev/video%d", devs[i]);
@@ -682,7 +700,7 @@ int main (int argc, char ** argv)
 		if (set_std==1)
 			set_standard(&fd[i], dev_standard);
 
-		int buffer_size = init_device (&fd[i], dev_name, width, height, &n_buffers, pixel_format);
+		int buffer_size = init_device (&fd[i], dev_name, width, height, &n_buffers[i], pixel_format);
 
 		if (!buffers)
 		{
@@ -699,9 +717,9 @@ int main (int argc, char ** argv)
 			exit (EXIT_FAILURE);
 		}
 
-		start_capturing (&fd[i], &n_buffers);
+		start_capturing (&fd[i], &n_buffers[i]);
 
-		pthread_create(&thread[i], NULL, mainloop, (void *)i);
+//		pthread_create(&thread[i], NULL, mainloop, (void *)i);
 		
 		have_dev = 1;
 	}
@@ -713,11 +731,16 @@ int main (int argc, char ** argv)
 		
 	out=0;
 
-	pthread_create(&prev_thread, NULL, preview_thread, NULL);
+	pthread_create(&thread[0], NULL, mainloop, (void *)0);
+
+
+//	pthread_create(&prev_thread, NULL, preview_thread, NULL);
 	pthread_create(&out_thread, NULL, output_thread, NULL);
 
 	int input;
 	char in;
+
+	while(1) usleep(1000000);
 
 	while(1){
 		system("clear");
