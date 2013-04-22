@@ -33,7 +33,8 @@ version 0.4 - The same of 0.3 but in English (November 2009)
 #define MAX_INPUT   16
 #define MAX_NORM    16
 
-#define MPLAYER "mplayer -demuxer rawvideo - -rawvideo w=720:h=576:format=rgb32 2>/dev/null >/dev/null"
+//#define MPLAYER "mplayer -demuxer rawvideo - -rawvideo w=720:h=576:format=bgr16 -name TEST 2>/dev/null >/dev/null"
+#define MPLAYER "mplayer -demuxer rawvideo - -rawvideo w=720:h=576:format=rgb24 -name TEST 2>/dev/null >/dev/null"
 
 //info needed to store one video frame in memory
 struct buffer {    
@@ -51,6 +52,7 @@ int		devs[]		= {0,1,2,3};
 int		out;
 int		prev_fps	= 5;
 int		frame[4];
+
 struct timespec	start;
 
 
@@ -94,7 +96,7 @@ static int xioctl (int fd, int request, void *arg)
 static int read_frame  (int * fd, int width, int height, int * n_buffers,
 						struct buffer * buffers, int pixel_format)
 {
-
+/*
 	if (-1 == read (*fd, buffers[0].start-1, buffers[0].length)) 
 	{
 		switch (errno) 
@@ -109,6 +111,13 @@ static int read_frame  (int * fd, int width, int height, int * n_buffers,
 		}
 		return 0;
 	}
+
+*/
+	while (width*height*Bpp != read (*fd, buffers[0].start, buffers[0].length)) 
+	{
+		usleep(1000);
+	}
+
 	return 1;
 }
 
@@ -220,13 +229,14 @@ static int init_device (int * fd, char * dev_name, int width,
 	fmt.type                = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	fmt.fmt.pix.width       = width; 
 	fmt.fmt.pix.height      = height;
-	fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_UYVY;
+	//fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_UYVY;
 	//fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUV420;
-	//fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB24;
+	fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB24;
+//	fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB565;
 	fmt.fmt.pix.colorspace  = V4L2_COLORSPACE_SRGB;
 	fmt.fmt.pix.field       = V4L2_FIELD_INTERLACED;
 
-	switch (pixel_format) 
+/*	switch (pixel_format) 
 	{
 		case 0:
 			fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUV420;
@@ -239,7 +249,8 @@ static int init_device (int * fd, char * dev_name, int width,
 			break;
 	}
 	
-	fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB32; //lasdlalsdaslda
+	fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB565; //lasdlalsdaslda
+*/
 
 	if (-1 == xioctl (*fd, VIDIOC_S_FMT, &fmt))
 		errno_exit ("VIDIOC_S_FMT");
@@ -420,8 +431,10 @@ typedef enum
 //just the main loop of this program 
 static void mainloop (void *arg)
 {
+	FILE *fp;
 	int buffer = (int) arg;
 
+	fp = popen(MPLAYER, "w");
 	printf ("thread %d started\n", buffer);
 //	return 0;
 
@@ -467,6 +480,8 @@ static void mainloop (void *arg)
 		if(read_frame(&fd[buffer], width, height, &buffer, &buffers[buffer], pixel_format))
 			frame[buffer]++;
 
+		fwrite(buffers[buffer].start,1, width*height*Bpp, fp);
+
 		logtime ("po read", buffer);
 
 //		printf("skipped frame?\n");
@@ -485,8 +500,8 @@ void preview_thread(void *arg){
 	FILE *fp = NULL;
 	struct buffer preview;
 
-	preview.length = width*height*4;
-	preview.start = malloc (width*height*4);
+	preview.length = width*height*Bpp;
+	preview.start = malloc (width*height*Bpp);
 
 	printf("preview thread started\n");
 //	fp = fopen("/tmp/preview", "w");
@@ -530,7 +545,7 @@ void preview_thread(void *arg){
 		}
 
 		if (fp){
-			fwrite(preview.start,1, width*height*4, fp);
+			fwrite(preview.start,1, width*height*Bpp, fp);
 		} else {
 //			fp = popen("cat > /tmp/kokosy", "w");
 			fp = popen(MPLAYER, "w");
@@ -546,8 +561,8 @@ void output_thread(void *arg){
 	int u_frame=0;
 	int len=Bpp*width*height;
 	struct buffer output;
-        output.length = width*height*4;
-        output.start = malloc (width*height*4);
+        output.length = width*height*Bpp;
+        output.start = malloc (width*height*Bpp);
 
 
 	printf("output thread started\n");
@@ -565,7 +580,7 @@ void output_thread(void *arg){
 
 	//		if (fp){
 				memcpy(output.start, buffers[out].start, len);
-				fwrite(output.start,4, width*height, fp);
+				fwrite(output.start,Bpp, width*height, fp);
 //			} else {
 	//			fp = popen("cat > /tmp/kokosy", "w");
 //			}
@@ -677,7 +692,7 @@ int main (int argc, char ** argv)
 	pthread_t prev_thread;
 	pthread_t out_thread;
 
-	Bpp = 4;
+	Bpp = 3;
 
 	for (i=0; i<4; i++){
 		sprintf(dev_name, "/dev/video%d", devs[i]);
@@ -728,14 +743,13 @@ int main (int argc, char ** argv)
 		
 	out=0;
 
-	pthread_create(&prev_thread, NULL, preview_thread, NULL);
+//	thread_create(&prev_thread, NULL, preview_thread, NULL);
 	pthread_create(&out_thread, NULL, output_thread, NULL);
 
 	int input;
 	char in;
 
 	while(1){
-		system("clear");
 		printf("0-3 change input; q/Q - exit; k,o - preview fps up,down\n");
 		printf("Preview: %d fps Input: %d\n",prev_fps,out);
 		system("/bin/stty raw");
@@ -768,6 +782,7 @@ int main (int argc, char ** argv)
 */
 		printf("\n%d\n", in);
 //		out=input-1;
+		system("clear");
 	}
 
 	pthread_join(thread[0], NULL);
@@ -778,7 +793,7 @@ int main (int argc, char ** argv)
 	exit(0);
 //	mainloop (&fd[0], width, height, &n_buffers, buffers, pixel_format);
 
-	write(STDOUT_FILENO, buffers[0].start, width*height*4);
+	write(STDOUT_FILENO, buffers[0].start, width*height*Bpp);
 					
 	//TODO: main loop never exits, a break method must be implemented to execute 
 	//the following code
